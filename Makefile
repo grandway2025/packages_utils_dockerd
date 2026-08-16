@@ -1,17 +1,17 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dockerd
-PKG_VERSION:=28.5.2
+PKG_VERSION:=29.7.2
 PKG_RELEASE:=1
 PKG_LICENSE:=Apache-2.0
 PKG_LICENSE_FILES:=LICENSE
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_GIT_URL:=github.com/moby/moby
-PKG_GIT_REF:=v$(PKG_VERSION)
+PKG_GIT_REF:=docker-v$(PKG_VERSION)
 PKG_SOURCE_URL:=https://codeload.$(PKG_GIT_URL)/tar.gz/$(PKG_GIT_REF)?
-PKG_HASH:=0e450c03c536a1304ba8fd26ca4c4ff96fac62182fd042fec90ffdf4a0969d40
-PKG_GIT_SHORT_COMMIT:=89c5e8f # SHA1 used within the docker executables
+PKG_HASH:=3a93a88bff41ffa6f4dca9f4ed9fc05e7fdb08e0f9014cf1d8177f85ecbc0683
+PKG_GIT_SHORT_COMMIT:=6a43e3d # SHA1 used within the docker executables
 
 PKG_MAINTAINER:=Gerard Ryan <G.M0N3Y.2503@gmail.com>
 
@@ -19,7 +19,7 @@ PKG_BUILD_DEPENDS:=golang/host
 PKG_BUILD_PARALLEL:=1
 PKG_BUILD_FLAGS:=no-mips16
 
-GO_PKG:=github.com/docker/docker
+GO_PKG:=github.com/moby/moby
 
 include $(INCLUDE_DIR)/package.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
@@ -36,13 +36,9 @@ define Package/dockerd
   DEPENDS:=$(GO_ARCH_DEPENDS) \
     +ca-certificates \
     +containerd \
-    +iptables \
-    +iptables-mod-extra \
-    +IPV6:ip6tables \
-    +IPV6:kmod-ipt-nat6 \
+    +nftables-json \
     +KERNEL_SECCOMP:libseccomp \
-    +kmod-ipt-nat \
-    +kmod-ipt-physdev \
+    +kmod-nf-nat \
     +kmod-nf-ipvs \
     +kmod-veth \
     +tini \
@@ -90,12 +86,26 @@ define EnsureVendoredCommit
 	)
 endef
 
+# $(1) = path to dependent package 'Makefile'
+# $(2) = dependency name (CONTAINERD / RUNC)
+define EnsureDockerfileVersion
+	( \
+		DEP_VER=$$$$( grep --only-matching --perl-regexp '(?<=PKG_VERSION:=)(.*)' "$(1)" ); \
+		VEN_VER=$$$$( grep --only-matching --perl-regexp '(?<=ARG $(2)_VERSION=v)(.*)' "$(PKG_BUILD_DIR)/Dockerfile" ); \
+		if [ "$$$${VEN_VER}" != "$$$${DEP_VER}" ]; then \
+			echo "ERROR: $(PKG_NAME) Expected 'PKG_VERSION:=$$$${VEN_VER}' in '$(1)', found 'PKG_VERSION:=$$$${DEP_VER}'"; \
+			exit 1; \
+		fi \
+	)
+endef
+
+
 define Build/Prepare
 	$(Build/Prepare/Default)
 
-	# Verify dependencies are the vendored version
-	$(call EnsureVendoredVersion,../containerd/Makefile,containerd.installer)
-	$(call EnsureVendoredVersion,../runc/Makefile,runc.installer)
+	# Verify containerd/runc versions from Dockerfile, tini from .installer
+	$(call EnsureDockerfileVersion,../containerd/Makefile,CONTAINERD)
+	$(call EnsureDockerfileVersion,../runc/Makefile,RUNC)
 	$(call EnsureVendoredVersion,../tini/Makefile,tini.installer)
 
 	# Verify CLI is the same version
@@ -154,11 +164,6 @@ define Package/dockerd/install
 
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/etc/config/dockerd $(1)/etc/config/dockerd
-
-	# Must be after systcl 11-br-netfilter.conf from kmod-br-netfilter
-	$(INSTALL_DIR) $(1)/etc/sysctl.d
-	$(INSTALL_DATA) ./files/etc/sysctl.d/sysctl-br-netfilter-ip.conf \
-		$(1)/etc/sysctl.d/12-br-netfilter-ip.conf
 endef
 
 define Package/dockerd/postinst
